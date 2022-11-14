@@ -96,19 +96,18 @@ func (r *Rdb) OnChange(cb func(op, key string)) {
 	})
 }
 
-func (r *Rdb) Exists(allKey []string) ([]int64, error) {
+func (r *Rdb) Exists(allKeys [][]string) ([]int64, error) {
 
 	ctx := context.Background()
 	pipe := r.db.Pipeline()
-	for _, key := range allKey {
-		pipe.Exists(ctx, key)
+	for _, keys := range allKeys {
+		pipe.HExists(ctx, keys[0], keys[1])
 	}
 	cmds, err := pipe.Exec(context.Background())
 	if err != nil {
 		return nil, err
 	}
-
-	allExists := make([]int64, len(allKey))
+	allExists := make([]int64, len(allKeys))
 	for i, cmd := range cmds {
 		ret, ok := cmd.(*redis.IntCmd)
 		if !ok {

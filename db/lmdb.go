@@ -15,17 +15,14 @@ const (
 	__maxReaders = 1024 * __maxDBs
 	__flags      = lmdb.NoMetaSync | lmdb.NoSync | lmdb.MapAsync | lmdb.WriteMap
 	__mode       = 0600
-	__key        = "key"
-	__field      = "field"
 )
 
 type Ldb struct {
-	tmpDir   string
-	rootKey  string
-	size     int64
-	env      *lmdb.Env
-	fieldDbi lmdb.DBI
-	keyDbi   lmdb.DBI
+	tmpDir  string
+	rootKey string
+	size    int64
+	env     *lmdb.Env
+	dbi     lmdb.DBI
 }
 
 func NewLdb(rootKey, tmpDir string, size int64) *Ldb {
@@ -70,11 +67,7 @@ func (ld *Ldb) _init() {
 	}
 
 	err = ld.env.Update(func(txn *lmdb.Txn) error {
-		ld.keyDbi, err = txn.OpenDBI(utils.Sprintf(__key, "/", ld.rootKey), lmdb.Create)
-		if err != nil {
-			return err
-		}
-		ld.fieldDbi, err = txn.OpenDBI(utils.Sprintf(__field, "/", ld.rootKey), lmdb.Create)
+		ld.dbi, err = txn.OpenDBI(ld.rootKey, lmdb.Create)
 		if err != nil {
 			return err
 		}
@@ -85,17 +78,16 @@ func (ld *Ldb) _init() {
 	}
 }
 
-func (ld *Ldb) GetAllKey() []string {
+func (ld *Ldb) GetAllKeys() [][]string {
 
-	allKey := []string{}
+	allKeys := [][]string{}
 	ld.env.View(func(txn *lmdb.Txn) error {
 
-		cursor, err := txn.OpenCursor(ld.keyDbi)
+		cursor, err := txn.OpenCursor(ld.dbi)
 		if err != nil {
 			return nil
 		}
 		defer cursor.Close()
-
 		for {
 			k, _, err := cursor.Get(nil, nil, lmdb.Next)
 			if lmdb.IsNotFound(err) {
@@ -104,17 +96,18 @@ func (ld *Ldb) GetAllKey() []string {
 			if err != nil {
 				return err
 			}
-			key := utils.BytesToString(k)
-			allKey = append(allKey, key)
+			data := utils.BytesToString(k)
+			keys := strings.Split(data, "/")
+			allKeys = append(allKeys, []string{keys[0], keys[1]})
 		}
 	})
-	return allKey
+	return allKeys
 }
 
 func (ld *Ldb) _get(txn *lmdb.Txn, key, field string, value interface{}) (interface{}, error) {
 
 	tag := strconv.S2B(utils.Sprintf(key, "/", field))
-	bytes, err := txn.Get(ld.fieldDbi, tag)
+	bytes, err := txn.Get(ld.dbi, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -128,62 +121,25 @@ func (ld *Ldb) _set(txn *lmdb.Txn, key, field string, value interface{}) error {
 
 	bytes := utils.WriteArg(value)
 	tag := strconv.S2B(utils.Sprintf(key, "/", field))
-	return txn.Put(ld.fieldDbi, tag, bytes, 0)
+	return txn.Put(ld.dbi, tag, bytes, 0)
 }
 
 func (ld *Ldb) _del(txn *lmdb.Txn, key, field string) error {
 
 	tag := strconv.S2B(utils.Sprintf(key, "/", field))
-	return txn.Del(ld.fieldDbi, tag, nil)
-}
-
-func (ld *Ldb) _getFieldMap(txn *lmdb.Txn, key string) (map[string]struct{}, error) {
-
-	fieldMap := map[string]struct{}{}
-	keyBit := strconv.S2B(key)
-	fieldsBit, err := txn.Get(ld.keyDbi, keyBit)
-	if !lmdb.IsNotFound(err) {
-		fields := strings.Split(utils.BytesToString(fieldsBit), ",")
-		for _, field := range fields {
-			fieldMap[field] = struct{}{}
-		}
-	}
-	return fieldMap, nil
-}
-
-func (ld *Ldb) _setFieldMap(txn *lmdb.Txn, key string, fieldMap map[string]struct{}) error {
-
-	keyBit := utils.StringToBytes(key)
-	fields := []string{}
-	for field := range fieldMap {
-		fields = append(fields, field)
-	}
-	fieldsStr := strings.Join(fields, ",")
-	return txn.Put(ld.keyDbi, keyBit, utils.StringToBytes(fieldsStr), 0)
-}
-
-func (ld *Ldb) _delFieldMap(txn *lmdb.Txn, key string) error {
-
-	keyBit := strconv.S2B(key)
-	return txn.Del(ld.keyDbi, keyBit, nil)
+	return txn.Del(ld.dbi, tag, nil)
 }
 
 func (ld *Ldb) Set(key string, out map[string]interface{}) (err error) {
 
 	return ld.env.Update(func(txn *lmdb.Txn) error {
-
-		fieldMap, err := ld._getFieldMap(txn, key)
-		if err != nil {
-			return err
-		}
 		for field, value := range out {
 			err := ld._set(txn, key, field, value)
 			if err != nil {
 				return err
 			}
-			fieldMap[field] = struct{}{}
 		}
-		return ld._setFieldMap(txn, key, fieldMap)
+		return nil
 	})
 }
 
@@ -202,23 +158,51 @@ func (ld *Ldb) Get(key string, info interface{}, out map[string]interface{}) err
 	})
 }
 
-func (ld *Ldb) Del(key string) (err error) {
+func (ld *Ldb) MatchAllKeys(key string) [][]byte {
 
-	return ld.env.Update(func(txn *lmdb.Txn) error {
+	allKeys := [][]byte{}
+	ld.env.View(func(txn *lmdb.Txn) error {
 
-		fieldMap, err := ld._getFieldMap(txn, key)
+		cursor, err := txn.OpenCursor(ld.dbi)
 		if err != nil {
-			return err
+			return nil
 		}
-		for field := range fieldMap {
+		defer cursor.Close()
+		for {
+			k, _, err := cursor.Get(nil, nil, lmdb.Next)
+			if lmdb.IsNotFound(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			data := utils.BytesToString(k)
+			if strings.HasPrefix(data, key) {
+				allKeys = append(allKeys, k)
+			}
+		}
+	})
+	return allKeys
+}
+
+func (ld *Ldb) Del(key string, field string) (err error) {
+
+	if field != "" {
+		return ld.env.Update(func(txn *lmdb.Txn) error {
 			err := ld._del(txn, key, field)
 			if err != nil {
 				return err
 			}
-		}
-		err = ld._delFieldMap(txn, key)
-		if err != nil {
-			return err
+			return nil
+		})
+	}
+	allkeys := ld.MatchAllKeys(key)
+	return ld.env.Update(func(txn *lmdb.Txn) error {
+		for _, key := range allkeys {
+			err := txn.Del(ld.dbi, key, nil)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -227,12 +211,6 @@ func (ld *Ldb) Del(key string) (err error) {
 func (ld *Ldb) IncrBy(key, field string, incr int64) (ret int64, err error) {
 
 	err = ld.env.Update(func(txn *lmdb.Txn) error {
-
-		fieldMap, err := ld._getFieldMap(txn, key)
-		if err != nil {
-			return err
-		}
-
 		_value, err := ld._get(txn, key, field, incr)
 		if err != nil {
 			return err
@@ -247,9 +225,7 @@ func (ld *Ldb) IncrBy(key, field string, incr int64) (ret int64, err error) {
 			return err
 		}
 		ret = number
-
-		fieldMap[field] = struct{}{}
-		return ld._setFieldMap(txn, key, fieldMap)
+		return nil
 	})
 	return ret, err
 }
@@ -257,11 +233,6 @@ func (ld *Ldb) IncrBy(key, field string, incr int64) (ret int64, err error) {
 func (ld *Ldb) Getset(key, field string, value interface{}) (ret interface{}, err error) {
 
 	err = ld.env.Update(func(txn *lmdb.Txn) error {
-
-		fieldMap, err := ld._getFieldMap(txn, key)
-		if err != nil {
-			return err
-		}
 		ret, err = ld._get(txn, key, field, value)
 		if err != nil {
 			return err
@@ -270,8 +241,7 @@ func (ld *Ldb) Getset(key, field string, value interface{}) (ret interface{}, er
 		if err != nil {
 			return err
 		}
-		fieldMap[field] = struct{}{}
-		return ld._setFieldMap(txn, key, fieldMap)
+		return nil
 	})
 	return ret, err
 }
@@ -279,19 +249,13 @@ func (ld *Ldb) Getset(key, field string, value interface{}) (ret interface{}, er
 func (ld *Ldb) DelField(key string, out map[string]interface{}) (err error) {
 
 	err = ld.env.Update(func(txn *lmdb.Txn) error {
-
-		fieldMap, err := ld._getFieldMap(txn, key)
-		if err != nil {
-			return err
-		}
 		for field := range out {
 			err := ld._del(txn, key, field)
 			if err != nil {
 				return err
 			}
-			delete(fieldMap, field)
 		}
-		return ld._setFieldMap(txn, key, fieldMap)
+		return nil
 	})
 	return err
 }

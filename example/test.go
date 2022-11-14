@@ -1,6 +1,11 @@
 package main
 
-import "github.com/qiniu/qmgo/field"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/qiniu/qmgo/field"
+)
 
 type SliceMock struct {
 	field.DefaultField `redis:"-"`
@@ -11,8 +16,11 @@ type SliceMock struct {
 }
 
 func testLdb() {
+
 }
 
 func main() {
+	strs := strings.SplitN("abc/abc", "/", 2)
+	fmt.Println(strs)
 	testLdb()
 }

@@ -54,21 +54,21 @@ func (oc *Obj3Cache) _onSync() {
 		if !ok {
 			return
 		}
-		oc.ldb.Del(key)
+		oc.ldb.Del(key, "")
 	})
 }
 
 func (oc *Obj3Cache) _initSync() error {
 
-	allKey := oc.ldb.GetAllKey()
-	allExists, err := oc.rdb.Exists(allKey)
+	allKeys := oc.ldb.GetAllKeys()
+	allExists, err := oc.rdb.Exists(allKeys)
 	if err != nil {
 		return err
 	}
-	for i := range allKey {
+	for i, keys := range allKeys {
 		ok := allExists[i]
 		if ok == 0 {
-			oc.ldb.Del(allKey[i])
+			oc.ldb.Del(keys[0], keys[1])
 		}
 	}
 	return nil
