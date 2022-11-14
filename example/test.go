@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/qiniu/qmgo/field"
 )
 
@@ -20,7 +17,5 @@ func testLdb() {
 }
 
 func main() {
-	strs := strings.SplitN("abc/abc", "/", 2)
-	fmt.Println(strs)
 	testLdb()
 }
